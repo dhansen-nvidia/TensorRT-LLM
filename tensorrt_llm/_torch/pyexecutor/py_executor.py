@@ -5,6 +5,8 @@ import dataclasses
 import datetime
 import functools
 import os
+import re
+import sys
 import threading
 import time
 import traceback
@@ -59,6 +61,7 @@ from ..speculative.drafter import Drafter
 from ..speculative.spec_sampler_base import SampleStateTensorsSpec
 from ..speculative.speculation_gate import SpeculationGate
 from .adp_iter_stats import ADPIterStatsBuffer
+from .bolt_profiler import BOLT_PROFILE_START_STOP_ENV_VAR_NAME, BoltProfiler
 from .connectors.kv_cache_connector import KvCacheConnectorManager
 from .dwdp import DwdpManager
 from .error_classification import ErrorBudget
@@ -116,6 +119,8 @@ BENCHMARK_REQ_QUEUES_SIZE_ENV_VAR_NAME = "TLLM_BENCHMARK_REQ_QUEUES_SIZE"
 # Format: comma-separated rank IDs, e.g. "0,1,3", or "all" for all ranks.
 # Default: "0" (only rank 0 prints, matching existing behavior).
 PROFILE_LOG_RANKS_ENV_VAR_NAME = "TLLM_PROFILE_LOG_RANKS"
+
+_BOLT_ITERATION_SPAN_PATTERN = re.compile(r"^\s*(\d+)(?:\s*-\s*(\d+))?\s*$")
 
 
 class PPCommTag(IntEnum):
@@ -234,6 +239,42 @@ def _load_iteration_indexes(env_var: str):
                 ) from None
 
     return frozenset(starts), frozenset(stops)
+
+
+@functools.cache
+def _load_bolt_iteration_indexes(
+        env_var: str) -> tuple[frozenset[int], frozenset[int]]:
+    """Parse validated, half-open BOLT profiling iteration ranges."""
+    value = os.environ.get(env_var)
+    if not value:
+        return frozenset(), frozenset()
+
+    ranges = []
+    for raw_span in value.split(","):
+        match = _BOLT_ITERATION_SPAN_PATTERN.fullmatch(raw_span)
+        if match is None:
+            raise ValueError(
+                f"Cannot parse BOLT iteration span {raw_span!r} in environment "
+                f"variable `{env_var}`={value!r}")
+        start = int(match.group(1))
+        stop_value = match.group(2)
+        stop = start + 1 if stop_value is None else int(stop_value)
+        if start >= stop:
+            raise ValueError(
+                f"BOLT iteration range {raw_span!r} in environment variable "
+                f"`{env_var}`={value!r} must have start < stop")
+        ranges.append((start, stop))
+
+    ranges.sort()
+    for previous, current in zip(ranges, ranges[1:], strict=False):
+        if current[0] < previous[1]:
+            raise ValueError(f"BOLT iteration ranges in environment variable "
+                             f"`{env_var}`={value!r} must not overlap")
+
+    return (
+        frozenset(start for start, _ in ranges),
+        frozenset(stop for _, stop in ranges),
+    )
 
 
 def _strip_py_multimodal_data_post_prefill(request: LlmRequest) -> None:
@@ -564,6 +605,8 @@ class PyExecutor:
         # profile config
         self.profile_start_iters, self.profile_stop_iters = _load_iteration_indexes(
             PROFILE_START_STOP_ENV_VAR_NAME)
+        self.bolt_profile_start_iters, self.bolt_profile_stop_iters = (
+            _load_bolt_iteration_indexes(BOLT_PROFILE_START_STOP_ENV_VAR_NAME))
 
         # related modules
         self.resource_manager = resource_manager
@@ -1612,6 +1655,8 @@ class PyExecutor:
     def _profiler(self):
         it = -1
         enabled = False
+        bolt_profiler = BoltProfiler.from_env(global_rank=self.global_rank)
+        bolt_enabled = False
         start_time = None
 
         # These events are used to record the time of the previous batch.
@@ -1663,8 +1708,21 @@ class PyExecutor:
         calibrator = get_calibrator()
 
         def profile_step():
+            nonlocal bolt_enabled
             nonlocal it, enabled, start_time, start_event_1, end_event_1, start_event_2, end_event_2, prev_device_step_time
             calibrator.post_step(it)
+            if (bolt_profiler is not None
+                    and self.iter_counter in self.bolt_profile_stop_iters
+                    and not self.is_warmup):
+                if not bolt_enabled:
+                    raise RuntimeError(
+                        "Inconsistent BOLT profiling state at stop")
+                torch.cuda.synchronize()
+                try:
+                    bolt_profiler.stop(iteration=self.iter_counter)
+                finally:
+                    bolt_enabled = False
+
             if (self.iter_counter in self.profile_stop_iters
                     and not self.is_warmup):
                 assert enabled, "Inconsistent CUDA profiling state"
@@ -1741,6 +1799,16 @@ class PyExecutor:
 
             it += 1
 
+            if (bolt_profiler is not None
+                    and self.iter_counter in self.bolt_profile_start_iters
+                    and not self.is_warmup):
+                if bolt_enabled:
+                    raise RuntimeError(
+                        "Inconsistent BOLT profiling state at start")
+                torch.cuda.synchronize()
+                bolt_profiler.start(iteration=self.iter_counter)
+                bolt_enabled = True
+
             if (self.iter_counter in self.profile_start_iters
                     and not self.is_warmup):
                 assert not enabled, "Inconsistent CUDA profiling state"
@@ -1771,6 +1839,25 @@ class PyExecutor:
         try:
             yield profile_step
         finally:
+            bolt_cleanup_error = None
+            if bolt_enabled:
+                original_exception_active = sys.exc_info()[0] is not None
+                try:
+                    torch.cuda.synchronize()
+                    bolt_profiler.stop(iteration=self.iter_counter,
+                                       partial=True)
+                except RuntimeError:
+                    if not original_exception_active:
+                        bolt_cleanup_error = sys.exc_info()[1]
+                    else:
+                        logger.error(
+                            "Unable to write the partial BOLT profile while handling "
+                            "an executor exception",
+                            exc_info=True,
+                        )
+                finally:
+                    bolt_enabled = False
+
             if enabled:
                 # Stop on early exit / exception
                 if enable_torch_trace:
@@ -1782,6 +1869,9 @@ class PyExecutor:
                 calibrator.stop()
                 torch.cuda.synchronize()
                 torch.cuda.cudart().cudaProfilerStop()
+
+            if bolt_cleanup_error is not None:
+                raise bolt_cleanup_error
 
     def _get_init_iter_stats(self, num_new_active_requests,
                              new_active_requests_queue_latency_ms):
