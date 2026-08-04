@@ -83,6 +83,7 @@ from ..speculative.spec_sampler_base import SpecSampler
 from ..speculative.speculation_gate import SpeculationGate
 from ..speculative.utils import get_static_draft_len, update_draft_len
 from .adp_iter_stats import ADPIterStatsBuffer
+from .bolt_profiler import BOLT_PROFILE_START_STOP_ENV_VAR_NAME
 from .connectors.kv_cache_connector import KvCacheConnectorManager
 from .connectors.kv_cache_layout import build_kv_cache_layout_v2
 from .cuda_graph_runner import ADPShapeAgreement
@@ -117,6 +118,8 @@ from .perf_metrics_manager import PerfMetricsManager
 from .pp_utils import (MpiProgressPump, PPCommTag, get_with_mpi_progress,
                        make_mpi_progress_exit_hook, make_mpi_progress_pump)
 from .profiling import PROFILE_START_STOP_ENV_VAR_NAME, PyExecutorProfileManager
+from .profiling import \
+    load_bolt_iteration_indexes as _load_bolt_iteration_indexes
 from .profiling import load_iteration_indexes as _load_iteration_indexes
 from .request_utils import (RequestBroadcaster,
                             derive_attention_dp_per_rank_request_cap,
@@ -877,6 +880,8 @@ class PyExecutor:
         # _load_iteration_indexes returns frozensets.
         self.profile_start_iters = set(_env_start_iters)
         self.profile_stop_iters = set(_env_stop_iters)
+        self.bolt_profile_start_iters, self.bolt_profile_stop_iters = (
+            _load_bolt_iteration_indexes(BOLT_PROFILE_START_STOP_ENV_VAR_NAME))
 
         self._metrics = {}
         self._disagg_coordinator = None
