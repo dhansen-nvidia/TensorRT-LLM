@@ -2,7 +2,7 @@
 
 set -ex
 
-# Align with the pre-installed cuDNN / cuBLAS / NCCL versions from
+# Align CUDA, cuDNN, and cuBLAS with the pre-installed versions from
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-26-08.html#rel-26-08
 CUDA_VER="13.4" # image reports CUDA_VERSION=13.4.1.012
 # Keep the installation for cuDNN if users want to install PyTorch with source codes.
@@ -14,7 +14,8 @@ CUDA_VER="13.4" # image reports CUDA_VERSION=13.4.1.012
 # can reproduce. The version guard below does not match on DLFW, so its cuDNN is deliberately
 # purged and reinstalled at this version.
 CUDNN_VER="9.25.1.1-1"
-NCCL_VER="2.30.7-1+cuda13.3"
+# NCCL 2.31 adds per-collective algorithm selection used by the AllReduce autotuner.
+NCCL_VER="2.31.2-1+cuda13.4"
 CUBLAS_VER="13.7.0.27-1"
 # Align with the pre-installed CUDA / NVCC / NVRTC versions from
 # https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html
