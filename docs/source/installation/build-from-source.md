@@ -24,6 +24,8 @@ cd TensorRT-LLM
 git lfs pull
 ```
 
+If you're using a git worktree, you may proceed from this point with the instructions below.
+
 ## Step 2: Pull the Development Container
 
 Pull the pre-built TensorRT LLM `devel` container from NGC. Replace `x.y.z` with the desired version. Browse the [available tags on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/tensorrt-llm/containers/devel/tags) to find the latest release.
@@ -34,7 +36,7 @@ docker pull nvcr.io/nvidia/tensorrt-llm/devel:x.y.z
 
 ## Step 3: Start the Container
 
-From the repository root, start a development container with the source tree mounted into it.
+From the repository root, start a development container with the source tree mounted into it:
 
 ```bash
 docker run --rm -it \
@@ -45,6 +47,17 @@ docker run --rm -it \
         --workdir <path_to_tensorrt_llm_in_container> \
         nvcr.io/nvidia/tensorrt-llm/devel:x.y.z
 ```
+
+````{admonition} git operations in a worktree
+:class: dropdown note
+If you're using a git worktree and want to run git commands inside the container, add this option to the `docker run` command:
+
+```bash
+--volume "$(git rev-parse --path-format=absolute --git-common-dir):$(git rev-parse --path-format=absolute --git-common-dir):rw"
+```
+
+Manage worktrees themselves from the host. Commands such as `git worktree move`, `remove`, `repair`, and `prune` rely on the worktree's original host path.
+````
 
 ```{admonition} Note on Docker flags
 :class: dropdown note

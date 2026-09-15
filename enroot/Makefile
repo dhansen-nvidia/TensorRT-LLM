@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 ifndef MAKEFILE_PYXIS_INCLUDED
 MAKEFILE_PYXIS_INCLUDED := 1
 
@@ -5,6 +8,11 @@ BASE_IMAGE         ?= $(shell grep '^ARG BASE_IMAGE=' ../docker/Dockerfile.multi
 BASE_TAG           ?= $(shell grep '^ARG BASE_TAG=' ../docker/Dockerfile.multi | grep -o '=.*' | tr -d '="')
 SQSH_PATH          ?= tensorrt_llm.devel.sqsh
 SOURCE_DIR         ?= $(shell readlink -f ..)
+SOURCE_GIT_DIR     := $(shell git -C "$(SOURCE_DIR)" rev-parse --absolute-git-dir 2>/dev/null)
+SOURCE_COMMON_DIR  := $(shell git -C "$(SOURCE_DIR)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+# A linked checkout's .git file points outside the source mount.
+GIT_MOUNT          := $(if $(filter-out $(SOURCE_COMMON_DIR),$(SOURCE_GIT_DIR)),$(SOURCE_COMMON_DIR):$(SOURCE_COMMON_DIR):rw)
+COMMA              := ,
 CODE_DIR           ?= /code/tensorrt_llm
 RUN_CMD            ?= --pty bash
 
@@ -25,7 +33,7 @@ build_sqsh:
 	srun \
 		--container-image "$(BASE_IMAGE):$(BASE_TAG)" \
 		--container-save "$(SQSH_PATH)" \
-		--container-mounts "$(SOURCE_DIR):$(CODE_DIR)" --container-workdir $(CODE_DIR)/docker/common \
+		--container-mounts "$(SOURCE_DIR):$(CODE_DIR)$(if $(GIT_MOUNT),$(COMMA)$(GIT_MOUNT))" --container-workdir $(CODE_DIR)/docker/common \
 		--container-mount-home --container-remap-root \
 		--export PYTHON_VERSION=$(PYTHON_VERSION),GITHUB_MIRROR=$(GITHUB_MIRROR),TORCH_INSTALL_TYPE=$(TORCH_INSTALL_TYPE),CUDA_VER=$(CUDA_VERSION),CUDNN_VER=$(CUDNN_VERSION),NCCL_VER=$(NCCL_VERSION),CUBLAS_VER=$(CUBLAS_VERSION),TRT_VER=$(TRT_VERSION) \
 		./install.sh --all
@@ -37,7 +45,7 @@ run_sqsh:
 
 	srun \
 		--container-image "$(SQSH_PATH)" \
-		--container-mounts "$(SOURCE_DIR):$(CODE_DIR)" --container-workdir $(CODE_DIR) \
+		--container-mounts "$(SOURCE_DIR):$(CODE_DIR)$(if $(GIT_MOUNT),$(COMMA)$(GIT_MOUNT))" --container-workdir $(CODE_DIR) \
 		--container-mount-home --container-remap-root \
 		--export PYTORCH_ALLOC_CONF=garbage_collection_threshold:0.99999 \
 		$(RUN_CMD)

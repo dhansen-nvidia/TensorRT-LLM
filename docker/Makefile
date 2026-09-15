@@ -1,3 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+SOURCE_DIR         ?= $(shell readlink -f ..)
+# A linked worktree's Git directory differs from the clone's common Git directory.
+SOURCE_GIT_DIR     := $(shell git -C "$(SOURCE_DIR)" rev-parse --absolute-git-dir 2>/dev/null)
+SOURCE_COMMON_DIR  := $(shell git -C "$(SOURCE_DIR)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+WORKTREE_ID        := $(if $(filter-out $(SOURCE_COMMON_DIR),$(SOURCE_GIT_DIR)),$(shell printf '%s' "$(SOURCE_DIR)" | sha256sum | cut -c1-12))
+WORKTREE_SUFFIX    := $(if $(WORKTREE_ID),-wt-$(WORKTREE_ID))
+
 # Default base image for the docker build as defined in Dockerfile.multi
 BASE_IMAGE         ?= $(shell grep '^ARG BASE_IMAGE=' Dockerfile.multi | grep -o '=.*' | tr -d '="')
 BASE_TAG           ?= $(shell grep '^ARG BASE_TAG=' Dockerfile.multi | grep -o '=.*' | tr -d '="')
@@ -6,6 +28,11 @@ TRITON_BASE_TAG    ?= $(shell grep '^ARG TRITON_BASE_TAG=' Dockerfile.multi | gr
 # Name of the new image
 IMAGE_NAME         ?= tensorrt_llm
 IMAGE_TAG          ?= latest
+# IMAGE_WITH_TAG is an escape hatch: when the caller supplies it, preserve it exactly.
+IMAGE_WITH_TAG_IS_EXPLICIT := $(if $(filter undefined,$(origin IMAGE_WITH_TAG)),,1)
+WORKTREE_IMAGE_SUFFIX = $(WORKTREE_SUFFIX)
+AUTOMATIC_WORKTREE_IMAGE_SUFFIX = $(if $(IMAGE_WITH_TAG_IS_EXPLICIT),,$(WORKTREE_IMAGE_SUFFIX))
+AUTOMATIC_WORKTREE_USER_SUFFIX = $(if $(IMAGE_WITH_TAG_IS_EXPLICIT),,$(WORKTREE_SUFFIX))
 
 # Used to share .cache when LOCAL_USER=1. Possibility of override is
 # helpful, e.g., for use with Docker rootless mode.
@@ -22,8 +49,12 @@ IS_ROOTLESS        ?= $(shell ./detect_rootless.sh)
 
 # Set this to 1 to add the current user to the docker image and run the container with the user
 LOCAL_USER         ?= 0
+PUBLISH_SUFFIX = $(IMAGE_TAG_SUFFIX)
 ifeq ($(LOCAL_USER),1)
-IMAGE_TAG_SUFFIX   ?= -$(USER_NAME)
+ifeq ($(origin IMAGE_TAG_SUFFIX),undefined)
+PUBLISH_SUFFIX = -$(USER_NAME)
+endif
+IMAGE_TAG_SUFFIX   ?= -$(USER_NAME)$(if $(and $(AUTOMATIC_WORKTREE_USER_SUFFIX),$(filter-out %$(AUTOMATIC_WORKTREE_USER_SUFFIX),$(LOCAL_IMAGE_WITH_TAG))),$(AUTOMATIC_WORKTREE_USER_SUFFIX))
 endif
 
 # Set this to 1 to use the image from Jenkins as the image for the `devel` stage in the build phase
@@ -33,6 +64,8 @@ JENKINS_DEVEL      ?= 0
 STAGE              ?=
 # Set this to define a custom image name and tag
 IMAGE_WITH_TAG     ?= $(IMAGE_NAME)$(if $(STAGE),/$(STAGE)):$(IMAGE_TAG)
+PUBLISH_IMAGE      = $(IMAGE_WITH_TAG)
+LOCAL_IMAGE_WITH_TAG = $(IMAGE_WITH_TAG)$(if $(and $(AUTOMATIC_WORKTREE_IMAGE_SUFFIX),$(filter-out %$(AUTOMATIC_WORKTREE_IMAGE_SUFFIX),$(IMAGE_WITH_TAG))),$(AUTOMATIC_WORKTREE_IMAGE_SUFFIX))
 PUSH_TO_STAGING    ?= 1
 DOCKER_BUILD_OPTS  ?= --pull --load
 DOCKER_BUILD_ARGS  ?=
@@ -84,7 +117,7 @@ endef
 
 # Rewrite `/tensorrt-llm:` in image tag with `/tensorrt-llm-staging:` to avoid directly overwriting
 define rewrite_tag
-$(shell echo $(IMAGE_WITH_TAG) | sed "s/\/tensorrt-llm:/\/tensorrt-llm-staging:/g")
+$(shell echo $(PUBLISH_IMAGE) | sed "s/\/tensorrt-llm:/\/tensorrt-llm-staging:/g")
 endef
 
 base_pull:
@@ -97,7 +130,7 @@ base_pull:
 %_build: BASH_ENV    = $(shell docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' $(BASE_IMAGE):$(BASE_TAG) \
     				   | grep '^BASH_ENV=' | sed 's/^[^=]*=//' 2>/dev/null)
 %_build: base_pull
-	@echo "Building docker image: $(IMAGE_WITH_TAG)"
+	@echo "Building docker image: $(LOCAL_IMAGE_WITH_TAG)"
 	docker buildx build $(DOCKER_BUILD_OPTS) $(DOCKER_BUILD_ARGS) \
 		--progress $(DOCKER_PROGRESS) \
 		$(GITHUB_SECRET_ARG) \
@@ -121,27 +154,32 @@ base_pull:
 		$(if $(BASH_ENV), --build-arg BASH_ENV="$(BASH_ENV)") \
 		$(if $(STAGE), --target $(STAGE)) \
 		--file Dockerfile.multi \
-		--tag $(IMAGE_WITH_TAG) \
+		--tag $(LOCAL_IMAGE_WITH_TAG) \
 		..
 
 %_user:
-	$(call add_local_user,$(IMAGE_WITH_TAG))
+	$(call add_local_user,$(LOCAL_IMAGE_WITH_TAG))
 
 %_push: %_build
-	@if [ $(PUSH_TO_STAGING) = 0 ]; then \
-		echo "Pushing docker image: $(IMAGE_WITH_TAG)"; \
-		docker push $(IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX); \
+ifeq ($(LOCAL_USER),1)
+	$(call add_local_user,$(LOCAL_IMAGE_WITH_TAG))
+endif
+	@set -e; if [ $(PUSH_TO_STAGING) = 0 ]; then \
+		$(if $(filter-out $(PUBLISH_IMAGE)$(PUBLISH_SUFFIX),$(LOCAL_IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX)),docker tag $(LOCAL_IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX) $(PUBLISH_IMAGE)$(PUBLISH_SUFFIX);) \
+		echo "Pushing docker image: $(PUBLISH_IMAGE)"; \
+		docker push $(PUBLISH_IMAGE)$(PUBLISH_SUFFIX); \
 	fi
-	@if [ $(PUSH_TO_STAGING) = 1 ]; then \
-		echo "Rewriting docker tag: $(IMAGE_WITH_TAG) to $(call rewrite_tag)"; \
-		docker tag $(IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX) $(call rewrite_tag)$(IMAGE_TAG_SUFFIX); \
+	@set -e; if [ $(PUSH_TO_STAGING) = 1 ]; then \
+		echo "Rewriting docker tag: $(LOCAL_IMAGE_WITH_TAG) to $(call rewrite_tag)"; \
+		docker tag $(LOCAL_IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX) $(call rewrite_tag)$(PUBLISH_SUFFIX); \
 		echo "Pushing docker image: $(call rewrite_tag)"; \
-		docker push $(call rewrite_tag)$(IMAGE_TAG_SUFFIX); \
+		docker push $(call rewrite_tag)$(PUBLISH_SUFFIX); \
 	fi
 
 %_pull:
-	@echo "Pulling docker image: $(IMAGE_WITH_TAG)"
-	docker pull $(IMAGE_WITH_TAG)
+	@echo "Pulling docker image: $(PUBLISH_IMAGE)"
+	docker pull $(PUBLISH_IMAGE)
+	$(if $(filter-out $(PUBLISH_IMAGE),$(LOCAL_IMAGE_WITH_TAG)),docker tag $(PUBLISH_IMAGE) $(LOCAL_IMAGE_WITH_TAG))
 
 DOCKER_RUN_OPTS ?= --rm -it --ipc=host --ulimit stack=67108864 $(if $(filter 0,$(IS_ROOTLESS)),--ulimit memlock=-1)
 DOCKER_RUN_ARGS   ?=
@@ -154,14 +192,13 @@ else
   # If set, use the specified devices
   GPU_OPTS ?= --gpus='"device=$(NVIDIA_VISIBLE_DEVICES_VAL)"'
 endif
-SOURCE_DIR        ?= $(shell readlink -f ..)
 CODE_DIR          ?= /code/tensorrt_llm
 EXTRA_VOLUMES     ?=
 CCACHE_DIR        ?= $(CODE_DIR)/cpp/.ccache
 CONAN_DIR         ?= $(CODE_DIR)/cpp/.conan
 USER_CACHE_DIR    ?= $(shell readlink -f "${HOME_DIR}/.cache")
 RUN_CMD           ?=
-CONTAINER_NAME    ?= tensorrt_llm
+CONTAINER_NAME    ?= tensorrt_llm$(WORKTREE_SUFFIX)
 WORK_DIR          ?= $(CODE_DIR)
 DOCKER_PULL       ?= 0
 
@@ -173,11 +210,12 @@ ifeq ($(DOCKER_PULL),1)
 	@$(MAKE) --no-print-directory $*_pull
 endif
 ifeq ($(LOCAL_USER),1)
-	$(call add_local_user,$(IMAGE_WITH_TAG))
+	$(call add_local_user,$(LOCAL_IMAGE_WITH_TAG))
 endif
 	docker run $(DOCKER_RUN_OPTS) $(DOCKER_RUN_ARGS) \
     		$(GPU_OPTS) \
     		--volume $(SOURCE_DIR):$(CODE_DIR) \
+		$(if $(WORKTREE_ID),--volume "$(SOURCE_COMMON_DIR):$(SOURCE_COMMON_DIR):rw") \
     		$(EXTRA_VOLUMES) \
     		$(if $(and $(filter 1,$(LOCAL_USER)),$(shell [ -w "$(USER_CACHE_DIR)" ] && echo 1)),--volume $(USER_CACHE_DIR):/home/$(USER_NAME)/.cache:rw) \
     		--env "CCACHE_DIR=$(CCACHE_DIR)" \
@@ -187,7 +225,7 @@ endif
     		--hostname $(shell hostname)-$* \
     		--name $(CONTAINER_NAME)-$*-$(USER_NAME) \
     		--tmpfs /tmp:exec \
-    		$(IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX) $(RUN_CMD)
+		$(LOCAL_IMAGE_WITH_TAG)$(IMAGE_TAG_SUFFIX) $(RUN_CMD)
 
 devel_%: STAGE = devel
 tritondevel_%: STAGE = tritondevel
@@ -204,15 +242,18 @@ release_run: WORK_DIR = /app/tensorrt_llm
 # For x86_64
 jenkins_%: IMAGE_WITH_TAG = $(shell . ../jenkins/current_image_tags.properties && echo $$LLM_DOCKER_IMAGE)
 jenkins_%: STAGE = tritondevel
+jenkins_%: WORKTREE_IMAGE_SUFFIX =
 
 # For aarch64
 jenkins-aarch64_%: IMAGE_WITH_TAG = $(shell . ../jenkins/current_image_tags.properties && echo $$LLM_SBSA_DOCKER_IMAGE)
 jenkins-aarch64_%: STAGE = tritondevel
+jenkins-aarch64_%: WORKTREE_IMAGE_SUFFIX =
 
 # For x86_64
 jenkins-rockylinux8_%: PYTHON_VERSION_TAG_ID = $(if $(findstring 3.12,${PYTHON_VERSION}),PY312,$(if $(findstring 3.10,${PYTHON_VERSION}),PY310,$(error Unknown PYTHON_VERSION specified)))
 jenkins-rockylinux8_%: IMAGE_WITH_TAG = $(shell . ../jenkins/current_image_tags.properties && echo $$LLM_ROCKYLINUX8_${PYTHON_VERSION_TAG_ID}_DOCKER_IMAGE)
 jenkins-rockylinux8_%: STAGE = tritondevel
+jenkins-rockylinux8_%: WORKTREE_IMAGE_SUFFIX =
 jenkins-rockylinux8_%: BASE_IMAGE = nvcr.io/nvidia/cuda
 jenkins-rockylinux8_%: BASE_TAG = 13.3.1-devel-rockylinux8
 
@@ -247,6 +288,7 @@ ngc-devel_%: STAGE = devel
 ngc-devel_%: DOCKER_BUILD_OPTS = --pull --builder=multi-builder --platform linux/arm64,linux/amd64
 ngc-devel_%: IMAGE_NAME = $(NGC_STAGING_REPO)
 ngc-devel_%: IMAGE_TAG = $(TRT_LLM_VERSION)
+ngc-devel_%: WORKTREE_IMAGE_SUFFIX =
 
 ngc-devel_push: DOCKER_BUILD_ARGS = --push
 ngc-devel_push: ngc-devel_build ;
@@ -259,6 +301,7 @@ ngc-release_%: DOCKER_BUILD_OPTS = --pull --load --platform linux/$(PLATFORM)
 ngc-release_%: DEVEL_IMAGE = $(NGC_STAGING_REPO)/devel:$(TRT_LLM_VERSION)
 ngc-release_%: IMAGE_NAME = $(NGC_STAGING_REPO)
 ngc-release_%: IMAGE_TAG = $(TRT_LLM_VERSION)-$(PLATFORM)
+ngc-release_%: WORKTREE_IMAGE_SUFFIX =
 
 ngc-release_run:  WORK_DIR = /app/tensorrt_llm
 ngc-release_run:  IMAGE_NAME = $(NGC_AUTO_REPO)
@@ -269,6 +312,7 @@ ngc-release_pull: IMAGE_TAG = $(TRT_LLM_VERSION)
 ngc-manifest_%: STAGE = release
 ngc-manifest_%: IMAGE_NAME = $(NGC_STAGING_REPO)
 ngc-manifest_%: IMAGE_TAG = $(TRT_LLM_VERSION)
+ngc-manifest_%: WORKTREE_IMAGE_SUFFIX =
 
 ngc-manifest_create:
 	docker pull $(IMAGE_WITH_TAG)-amd64

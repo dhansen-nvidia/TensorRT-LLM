@@ -41,7 +41,7 @@ git lfs pull
 
 **On systems with GNU `make`**
 
-Create a Docker image for development. The image will be tagged locally with `tensorrt_llm/devel:latest`.
+Create a Docker image for development. The image will be tagged locally with `tensorrt_llm/devel:latest` (with an automatic suffix in linked worktrees). The same build/run commands work in either checkout.
 
 ```bash
 make -C docker build
@@ -76,6 +76,19 @@ docker run --rm -it \
         --workdir /code/tensorrt_llm \
         tensorrt_llm/devel:latest
 ```
+
+````{admonition} Using git worktrees
+:class: dropdown note
+If worktrees have different Docker build inputs, use a distinct image tag for each worktree in both commands so that one build does not replace another's local tag. Docker still shares identical image layers between tags.
+
+To run git commands inside the container from a linked worktree, also add this option to the `docker run` command:
+
+```bash
+--volume "$(git rev-parse --path-format=absolute --git-common-dir):$(git rev-parse --path-format=absolute --git-common-dir):rw"
+```
+
+Manage worktrees themselves from the host. Commands such as `git worktree move`, `remove`, `repair`, and `prune` rely on the worktree's original host path.
+````
 
 Note: please make sure to set `--ipc=host` as a docker run argument to avoid `Bus error (core dumped)`.
 
