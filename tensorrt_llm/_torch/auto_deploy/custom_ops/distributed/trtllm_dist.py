@@ -94,7 +94,7 @@ def trtllm_allreduce(tensor, op, strategy: str, all_reduce_params=None):
         raise ValueError(
             f"Invalid allreduce strategy: {strategy}. "
             f"Valid options: AUTO, NCCL, ONESHOT, TWOSHOT, MIN_LATENCY, "
-            f"LOWPRECISION, UB, MNNVL, NCCL_SYMMETRIC"
+            f"LOWPRECISION, UB, MNNVL, NCCL_SYMMETRIC, NCCL_RING"
         )
 
     # Cache key includes rank, world_size, dtype, and strategy to handle different configurations

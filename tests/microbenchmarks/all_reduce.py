@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -376,6 +376,7 @@ def allreduce_benchmark(
 
 _STRATEGY_MAP = {
     "NCCL": AllReduceStrategy.NCCL,
+    "NCCL_RING": AllReduceStrategy.NCCL_RING,
     "NCCL_SYMMETRIC": AllReduceStrategy.NCCL_SYMMETRIC,
     "UB": AllReduceStrategy.UB,
     "ONESHOT": AllReduceStrategy.ONESHOT,
@@ -542,8 +543,8 @@ def allreduce_benchmark_all(
     # strategies
     if strategy_names is None:
         strategy_names = [
-            "NCCL", "NCCL_SYMMETRIC", "UB", "ONESHOT", "TWOSHOT", "AUTO",
-            "MNNVL"
+            "NCCL", "NCCL_RING", "NCCL_SYMMETRIC", "UB", "ONESHOT", "TWOSHOT",
+            "AUTO", "MNNVL"
         ]
     strategies = [_STRATEGY_MAP[s] for s in strategy_names]
 
@@ -742,12 +743,25 @@ if __name__ == "__main__":
     parser.add_argument("--explore_2d", action="store_true", default=False)
     parser.add_argument("--enable_cudagraph", action="store_true")
     parser.add_argument("--save_csv", type=str, default=None)
+    parser.add_argument("--inner_loop", type=int, default=200)
+    parser.add_argument("--outer_loop", type=int, default=10)
     parser.add_argument("--enable_auto", action="store_true", default=False)
     parser.add_argument("--benchmark",
                         action="store_true",
                         default=False,
                         help="Run comprehensive benchmark across all backends "
                         "with nccl-tests style output")
+    parser.add_argument(
+        "--strategies",
+        nargs="+",
+        choices=sorted(_STRATEGY_MAP),
+        default=None,
+        help="AllReduce strategies to include in benchmark mode")
+    parser.add_argument("--fusions",
+                        nargs="+",
+                        choices=sorted(_FUSION_MAP),
+                        default=None,
+                        help="Fusion operations to include in benchmark mode")
     parser.add_argument("--profile_gemm_allreduce",
                         action="store_true",
                         default=False)
@@ -761,6 +775,10 @@ if __name__ == "__main__":
             explore_2d=args.explore_2d,
             enable_cudagraph=args.enable_cudagraph,
             save_csv=args.save_csv,
+            strategy_names=args.strategies,
+            fusion_names=args.fusions,
+            inner_loop=args.inner_loop,
+            outer_loop=args.outer_loop,
         )
     else:
         allreduce_benchmark(

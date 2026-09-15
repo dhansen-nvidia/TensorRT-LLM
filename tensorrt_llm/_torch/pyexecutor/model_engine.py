@@ -6275,10 +6275,10 @@ class PyTorchModelEngine(ModelEngine):
         # Disable UB for unsupported platforms
         if not ub.ub_supported():
             return False
-        # NCCL_SYMMETRIC strategy no longer requires UserBuffer allocator initialization.
-        # It uses NCCLWindowAllocator from ncclUtils directly.
+        # NCCL symmetric strategies do not require UserBuffer allocator initialization.
+        # They use NCCLWindowAllocator from ncclUtils directly.
         if self.llm_args.allreduce_strategy == "NCCL_SYMMETRIC":
-            # Skip UB initialization for NCCL_SYMMETRIC - it uses NCCLWindowAllocator directly
+            # Skip UB initialization for NCCL symmetric strategies - they use NCCLWindowAllocator directly
             return False
         ub.initialize_userbuffers_manager(self.mapping.tp_size,
                                           self.mapping.pp_size,

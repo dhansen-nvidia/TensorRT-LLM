@@ -45,7 +45,7 @@ _TACTIC_NAMES = {
     8: "NCCL_SYMMETRIC",
     9: "SYMM_MEM",
     10: "NCCL_RING",
-    11: "NCCL_SYMK",
+    11: "NCCL_SYMK",  # Historical experiment logs; no longer an available tactic.
 }
 _DTYPE_BYTES = {
     "bool": 1,

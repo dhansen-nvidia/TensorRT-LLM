@@ -5943,12 +5943,12 @@ class TorchLlmArgs(BaseLlmArgs):
         description="If true, force dynamic quantization. Defaults to False.",
         status="prototype")
 
-    allreduce_strategy: Optional[Literal[
-        'AUTO', 'NCCL', 'UB', 'MINLATENCY', 'ONESHOT', 'TWOSHOT',
-        'LOWPRECISION', 'MNNVL',
-        'NCCL_SYMMETRIC']] = Field(default='AUTO',
-                                   description="Allreduce strategy to use.",
-                                   status="beta")
+    allreduce_strategy: Optional[
+        Literal['AUTO', 'NCCL', 'UB', 'MINLATENCY', 'ONESHOT', 'TWOSHOT',
+                'LOWPRECISION', 'MNNVL', 'NCCL_SYMMETRIC',
+                'NCCL_RING']] = Field(default='AUTO',
+                                      description="Allreduce strategy to use.",
+                                      status="beta")
 
     checkpoint_loader: Optional[object] = Field(
         default=None,

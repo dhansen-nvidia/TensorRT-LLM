@@ -83,6 +83,28 @@ TRTLLM_NAMESPACE_BEGIN
 namespace torch_ext
 {
 
+bool isNcclAllReduceConfigSupported()
+{
+#if ENABLE_MULTI_DEVICE
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 31, 2)
+    static bool const supported = []()
+    {
+        int version = 0;
+        NCCLCHECK_THROW(ncclGetVersion(&version));
+        TORCH_CHECK(version >= NCCL_VERSION(2, 31, 2),
+            "This TensorRT-LLM build requires NCCL >= 2.31.2 for configured AllReduce; loaded NCCL version code: ",
+            version, ". Use a runtime compatible with this build.");
+        return true;
+    }();
+    return supported;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
 #if ENABLE_MULTI_DEVICE
 
 namespace
@@ -95,6 +117,26 @@ struct overloaded : Ts...
 };
 template <class... Ts>
 overloaded(Ts...) -> overloaded<Ts...>;
+
+void launchNcclAllReduce(void const* sendBuffer, void* recvBuffer, size_t count, ncclDataType_t dataType,
+    ncclComm_t comm, cudaStream_t stream, char const* algorithmSelection = nullptr)
+{
+    if (algorithmSelection == nullptr)
+    {
+        NCCLCHECK_THROW(ncclAllReduce(sendBuffer, recvBuffer, count, dataType, ncclSum, comm, stream));
+        return;
+    }
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 31, 2)
+    TORCH_CHECK(isNcclAllReduceConfigSupported(), "Configured AllReduce requires NCCL >= 2.31.2.");
+    ncclCollConfig_t config = NCCL_COLLCONFIG_INITIALIZER;
+    config.algSelection = algorithmSelection;
+    config.forceAlgSelection = 1;
+    NCCLCHECK_THROW(ncclAllReduceConfig(sendBuffer, recvBuffer, count, dataType, ncclSum, comm, stream, &config));
+#else
+    TORCH_CHECK(false, "NCCL_RING requires TensorRT-LLM built against NCCL >= 2.31.2.");
+#endif
+}
 
 using tensorrt_llm::common::NvmlManager;
 using tensorrt_llm::common::NVMLWrapper;
@@ -302,6 +344,8 @@ public:
         {
         case AllReduceStrategyType::UB: return runUBAllReduce(input, residual, norm_weight, scale, bias);
         case AllReduceStrategyType::NCCL: return runNCCLAllReduce(input, residual, norm_weight, scale, bias);
+        case AllReduceStrategyType::NCCL_RING:
+            return runNCCLAllReduce(input, residual, norm_weight, scale, bias, "RING");
         case AllReduceStrategyType::NCCL_SYMMETRIC:
             return runNCCLAllReduceSymmetric(input, residual, norm_weight, scale, bias);
         case AllReduceStrategyType::MIN_LATENCY:
@@ -322,7 +366,8 @@ public:
         {
             mNcclComm = getComm(mGroup);
         }
-        if (mStrategy != AllReduceStrategyType::NCCL && mStrategy != AllReduceStrategyType::UB)
+        if (mStrategy != AllReduceStrategyType::NCCL && mStrategy != AllReduceStrategyType::NCCL_RING
+            && mStrategy != AllReduceStrategyType::UB)
         {
 
             initGroupTopology();
@@ -415,7 +460,8 @@ private:
 
     std::vector<torch::Tensor> runNCCLAllReduce(torch::Tensor const& input,
         torch::optional<torch::Tensor> const& residual, torch::optional<torch::Tensor> const& norm_weight,
-        torch::optional<torch::Tensor> const& scale, torch::optional<torch::Tensor> const& bias)
+        torch::optional<torch::Tensor> const& scale, torch::optional<torch::Tensor> const& bias,
+        char const* algorithmSelection = nullptr)
     {
         torch::Tensor reduce_output;
 
@@ -424,11 +470,13 @@ private:
                            auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
                            int size = input.numel();
                            reduce_output = torch::empty_like(input);
-                           NCCLCHECK_THROW(ncclAllReduce(input.data_ptr(), reduce_output.mutable_data_ptr(), size,
-                               (*getDtypeMap())[mType], ncclSum, *rawComm, stream));
+                           launchNcclAllReduce(input.data_ptr(), reduce_output.mutable_data_ptr(), size,
+                               (*getDtypeMap())[mType], *rawComm, stream, algorithmSelection);
                        },
                        [&](c10::intrusive_ptr<c10d::ProcessGroup>& torchPg)
                        {
+                           TORCH_CHECK(algorithmSelection == nullptr,
+                               "NCCL per-collective algorithm selection requires the raw NCCL communicator path");
                            reduce_output = input.clone();
                            // TLLM_LOG_INFO("AllReduce Rank: %d, tensor numel: %d", torchPg->getRank(),
                            // reduce_output.numel());
@@ -574,8 +622,9 @@ private:
                 "using plain CUDA tensor for output");
         }
 
-        // Perform allreduce
-        NCCLCHECK_THROW(ncclAllReduce(inputPtr, outputPtr, size, (*getDtypeMap())[mType], ncclSum, comm, stream));
+        // When requested, restrict selection to the symmetric-kernel family while
+        // leaving the exact kernel and all resource settings (including CTA count) to NCCL.
+        launchNcclAllReduce(inputPtr, outputPtr, size, (*getDtypeMap())[mType], comm, stream);
 
         if (mOp == AllReduceFusionOp::NONE)
         {
@@ -1392,9 +1441,9 @@ private:
     {
         if (mStrategy != AllReduceStrategyType::AUTO)
         {
-            // For UB,NCCL,NCCL_SYMMETRIC, the correctness of the strategy dispatching is guaranteed by the user.
+            // For UB and NCCL strategies, the correctness of the strategy dispatching is guaranteed by the user.
             if (mStrategy == AllReduceStrategyType::UB || mStrategy == AllReduceStrategyType::NCCL
-                || mStrategy == AllReduceStrategyType::NCCL_SYMMETRIC)
+                || mStrategy == AllReduceStrategyType::NCCL_RING || mStrategy == AllReduceStrategyType::NCCL_SYMMETRIC)
             {
                 return mStrategy;
             }
@@ -2311,6 +2360,7 @@ TRTLLM_NAMESPACE_END
 
 TORCH_LIBRARY_FRAGMENT(trtllm, m)
 {
+    m.def("is_nccl_allreduce_config_supported() -> bool");
     m.def(
         "mnnvl_fusion_allreduce(Tensor input, Tensor? gamma, Tensor? residual, "
         "float? epsilon, Tensor(a!) comm_buffer, Tensor buffer_flags, bool rmsnorm_fusion, "
@@ -2428,6 +2478,7 @@ TORCH_LIBRARY_IMPL(trtllm, CUDA, m)
 
 TORCH_LIBRARY_IMPL(trtllm, CompositeExplicitAutograd, m)
 {
+    m.impl("is_nccl_allreduce_config_supported", &tensorrt_llm::torch_ext::isNcclAllReduceConfigSupported);
     m.impl("validate_allreduce_tuning_buckets", &tensorrt_llm::torch_ext::validateAllReduceTuningBuckets);
     m.impl("clear_allreduce_tactic_cache", &tensorrt_llm::torch_ext::clearAllReduceTacticCache);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,6 +61,8 @@ enum class AllReduceStrategyType : int8_t
     LOWPRECISION = 6,
     MNNVL = 7,
     NCCL_SYMMETRIC = 8,
+    // Value 9 is reserved for the Python-side SYMM_MEM strategy.
+    NCCL_RING = 10,
 };
 
 enum class AllReduceStrategyConfig : int8_t
@@ -124,6 +126,7 @@ inline std::ostream& operator<<(std::ostream& os, AllReduceStrategyType op)
     case AllReduceStrategyType::LOWPRECISION: os << "LOWPRECISION"; break;
     case AllReduceStrategyType::MNNVL: os << "MNNVL"; break;
     case AllReduceStrategyType::NCCL_SYMMETRIC: os << "NCCL_SYMMETRIC"; break;
+    case AllReduceStrategyType::NCCL_RING: os << "NCCL_RING"; break;
     }
     return os;
 }

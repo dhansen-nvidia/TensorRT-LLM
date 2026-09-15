@@ -2434,6 +2434,12 @@ class AllReduceRunner(TunableRunner):
             self.input_uses_nccl_window,
         )
 
+    def __repr__(self) -> str:
+        return (
+            f"AllReduceRunner(tp_size={self.tp_size}, group={self.group}, "
+            f"input_dtype={self.input_dtype}, fusion={AllReduceFusionOp(self.op).name}, "
+            f"input_uses_nccl_window={self.input_uses_nccl_window})")
+
     @classmethod
     def _maybe_preallocate_buffers(cls,
                                    input_tensor: torch.Tensor,
@@ -2497,6 +2503,8 @@ class AllReduceRunner(TunableRunner):
             AllReduceStrategy.NCCL_SYMMETRIC.value,
             AllReduceStrategy.NCCL.value,
         ]
+        if torch.ops.trtllm.is_nccl_allreduce_config_supported():
+            valid_strategies.insert(1, AllReduceStrategy.NCCL_RING.value)
         # Fallback in allreduceOp is set to NCCL_SYMMETRIC as default
         # So we need to check if the workspace size is too large to avoid hanging.
         workspace_size = inputs[0].numel() * inputs[0].element_size()

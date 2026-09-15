@@ -289,7 +289,7 @@ class ShardingTransformConfig(TransformConfig):
         default=AllReduceStrategy.AUTO,
         description="AllReduce strategy for distributed operations. "
         "Options: AUTO (automatic selection), NCCL, ONESHOT, TWOSHOT, MIN_LATENCY, "
-        "LOWPRECISION, UB, MNNVL, NCCL_SYMMETRIC",
+        "LOWPRECISION, UB, MNNVL, NCCL_SYMMETRIC, NCCL_RING",
     )
 
     allgather_strategy: AllGatherStrategy = Field(

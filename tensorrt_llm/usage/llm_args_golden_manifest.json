@@ -10,7 +10,8 @@
         "TWOSHOT",
         "LOWPRECISION",
         "MNNVL",
-        "NCCL_SYMMETRIC"
+        "NCCL_SYMMETRIC",
+        "NCCL_RING"
       ],
       "capture_policy": "literal|none",
       "kind": "categorical",

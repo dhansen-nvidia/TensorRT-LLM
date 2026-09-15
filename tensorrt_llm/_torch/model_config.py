@@ -351,6 +351,7 @@ class ModelConfig(Generic[TConfig]):
                 "LOWPRECISION": AllReduceStrategy.LOWPRECISION,
                 "MNNVL": AllReduceStrategy.MNNVL,
                 "NCCL_SYMMETRIC": AllReduceStrategy.NCCL_SYMMETRIC,
+                "NCCL_RING": AllReduceStrategy.NCCL_RING,
             }
             key = strategy.upper()
             return maps[key] if key in maps else AllReduceStrategy.AUTO

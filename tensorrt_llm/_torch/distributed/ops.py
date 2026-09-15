@@ -846,6 +846,9 @@ class AllReduce(nn.Module):
 
                 - NCCL: Use NCCL allreduce.
 
+                - NCCL_RING: Use NCCL allreduce restricted to the Ring algorithm family.
+
+
                 - MIN_LATENCY: AllReduce uses MIN_LATENCY mode kernel.
 
                 - AUTO: AUTO chooses the best available strategy. Will try MNNVL,
@@ -864,7 +867,7 @@ class AllReduce(nn.Module):
                 - RESIDUAL_RMS_NORM_OUT_QUANT_FP8
                 - RESIDUAL_RMS_NORM_OUT_QUANT_NVFP4
 
-            Note: NCCL, UB, and LOWPRECISION strategies only support consequent kernel calls
+            Note: NCCL, NCCL_RING, UB, and LOWPRECISION strategies only support consequent kernel calls
         instead of fused operations.
 
         Note:
@@ -937,6 +940,7 @@ class AllReduce(nn.Module):
                     allocate_low_presicion_allreduce_workspace(self.mapping)
                 if self.strategy not in (AllReduceStrategy.UB,
                                          AllReduceStrategy.NCCL,
+                                         AllReduceStrategy.NCCL_RING,
                                          AllReduceStrategy.NCCL_SYMMETRIC):
                     self.workspace = get_allreduce_workspace(self.mapping)
 
