@@ -29,6 +29,7 @@ from tensorrt_llm._torch.utils import (ActType_TrtllmGen, Fp4QuantizedTensor,
 from ..autotuner import (AutoTuner, ConstraintSpec, DistributedTuningStrategy,
                          DynamicTensorSpec, OptimizationProfile, TunableRunner,
                          TuningConfig)
+from .fast_custom_op import fast_custom_op
 
 _MOE_AUTOTUNE_DUMMY_DISTRIBUTION_ENV = (
     "TRTLLM_GEN_MOE_AUTOTUNE_DUMMY_DISTRIBUTION")
@@ -704,7 +705,7 @@ class FP4BlockScaleMoERunner(TunableRunner):
         return [int(tactic[0]), int(tactic[1])]
 
 
-@torch.library.custom_op("trtllm::fp4_block_scale_moe_runner", mutates_args=())
+@fast_custom_op("trtllm::fp4_block_scale_moe_runner", mutates_args=())
 def fp4_block_scale_moe_runner(
         routing_logits: Optional[torch.Tensor],
         routing_bias: Optional[torch.Tensor],
@@ -1155,7 +1156,7 @@ class FP8BlockScaleMoERunner(TunableRunner):
         return tuning_config
 
 
-@torch.library.custom_op("trtllm::fp8_block_scale_moe_runner", mutates_args=())
+@fast_custom_op("trtllm::fp8_block_scale_moe_runner", mutates_args=())
 def fp8_block_scale_moe_runner(routing_logits: Optional[torch.Tensor],
                                routing_bias: torch.Tensor,
                                hidden_states: torch.Tensor,
@@ -1516,8 +1517,7 @@ class MxE4m3MxE2m1BlockScaleMoERunner(TunableRunner):
         return tuning_config
 
 
-@torch.library.custom_op("trtllm::mxe4m3_mxe2m1_block_scale_moe_runner",
-                         mutates_args=())
+@fast_custom_op("trtllm::mxe4m3_mxe2m1_block_scale_moe_runner", mutates_args=())
 def mxe4m3_mxe2m1_block_scale_moe_runner(
         routing_logits: Optional[torch.Tensor],
         routing_bias: Optional[torch.Tensor],

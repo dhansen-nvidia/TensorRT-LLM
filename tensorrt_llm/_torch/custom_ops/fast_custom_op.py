@@ -57,6 +57,7 @@ def fast_custom_op(
     *,
     mutates_args: Union[Iterable[str], str] = (),
     device_types: Union[str, Tuple[str, ...]] = "CUDA",
+    tags: Tuple[torch.Tag, ...] = (),
 ) -> Callable[[Callable], "FastCustomOp"]:
     """Register a Python function as a fast custom torch op.
 
@@ -65,6 +66,7 @@ def fast_custom_op(
       mutates_args: names of arguments that are mutated in-place; empty tuple
         means the op is pure.
       device_types: backend(s) to register the impl on (default ``"CUDA"``).
+      tags: ``torch.Tag`` values to attach to the op's schema.
     """
     if "::" not in qualname:
         raise ValueError(f"qualname must be '<ns>::<name>', got {qualname!r}")
@@ -79,7 +81,7 @@ def fast_custom_op(
     def decorator(fn: Callable) -> "FastCustomOp":
         schema = infer_schema(fn, op_name=op_name, mutates_args=mutates_args_tuple)
         lib = _get_library(namespace)
-        lib.define(schema)
+        lib.define(schema, tags=tags)
         for dt in dev_types:
             lib.impl(op_name, fn, dt)
         return FastCustomOp(qualname=qualname, namespace=namespace, op_name=op_name, python_fn=fn)
